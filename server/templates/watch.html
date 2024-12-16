@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stream Monitor</title>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #fff;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        #pixelArt {
+            image-rendering: pixelated;
+            border: 2px solid #333;
+            margin: 20px;
+            background: #000;
+        }
+        .stats {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Stream Monitor</h1>
+    <canvas id="pixelArt" width="64" height="32" style="width: 640px; height: 320px;"></canvas>
+    <div class="stats">
+        <div>FPS: <span id="fps">0</span></div>
+        <div>Frame Count: <span id="frameCount">0</span></div>
+        <div>Status: <span id="status">Connecting...</span></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pixelArt');
+        const ctx = canvas.getContext('2d');
+        let frameCount = 0;
+        let lastFrameTime = performance.now();
+        
+        function updateFrame() {
+            fetch('/frame')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('status').textContent = data.error;
+                        return;
+                    }
+                    
+                    // Create ImageData from RGB values
+                    const imageData = ctx.createImageData(64, 32);
+                    for (let y = 0; y < 32; y++) {
+                        for (let x = 0; x < 64; x++) {
+                            const pixelIndex = (y * 64 + x) * 4;
+                            const rgb = data.frame[y][x];
+                            imageData.data[pixelIndex] = rgb[0];     // R
+                            imageData.data[pixelIndex + 1] = rgb[1]; // G
+                            imageData.data[pixelIndex + 2] = rgb[2]; // B
+                            imageData.data[pixelIndex + 3] = 255;    // A
+                        }
+                    }
+                    
+                    // Draw frame
+                    ctx.putImageData(imageData, 0, 0);
+                    
+                    // Update stats
+                    frameCount++;
+                    document.getElementById('frameCount').textContent = frameCount;
+                    
+                    const now = performance.now();
+                    const fps = 1000 / (now - lastFrameTime);
+                    document.getElementById('fps').textContent = fps.toFixed(1);
+                    lastFrameTime = now;
+                    
+                    document.getElementById('status').textContent = 'Connected';
+                })
+                .catch(error => {
+                    document.getElementById('status').textContent = 'Error: ' + error;
+                });
+        }
+
+        // Update every 33ms (approximately 30fps)
+        setInterval(updateFrame, 33);
+    </script>
+</body>
+</html> 

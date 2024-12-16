@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Stream</title>
+    <style>
+        .container {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+        }
+        .video-container {
+            flex: 1;
+        }
+        .json-container {
+            flex: 1;
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="video-container">
+            <h2>Video Stream</h2>
+            <img src="{{ url_for('video_feed') }}">
+        </div>
+        <div class="json-container">
+            <h2>Pixel Data</h2>
+            <pre id="jsonData">Waiting for data...</pre>
+        </div>
+    </div>
+
+    <script>
+        const eventSource = new EventSource("{{ url_for('pixel_data') }}");
+        const jsonData = document.getElementById('jsonData');
+        
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            jsonData.textContent = JSON.stringify(data, null, 2);
+        };
+
+        eventSource.onerror = function(event) {
+            console.error("EventSource failed:", event);
+            eventSource.close();
+        };
+    </script>
+</body>
+</html> 
