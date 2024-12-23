@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import streamlink
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, Response, make_response
 import threading
 import time
 import requests
@@ -11,12 +11,7 @@ from io import BytesIO
 import warnings
 import os
 import logging
-from datetime import datetime
-
-# Twitch configuration
-STREAMER_NAME = "babyyteethh"
-CLIENT_ID = "zcpmf7lgoc4om8aruf9k9c9zrfvujh"
-CLIENT_SECRET = "4e3gh2otu25e055kwksqvmfgx9vm44"
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -30,7 +25,7 @@ logging.getLogger('streamlink.stream.ffmpegmux').setLevel(logging.ERROR)
 # Twitch API credentials
 CLIENT_ID = "zcpmf7lgoc4om8aruf9k9c9zrfvujh"
 CLIENT_SECRET = "4e3gh2otu25e055kwksqvmfgx9vm44"
-STREAMER_NAME = "babyyteethh"
+STREAMER_NAME = "neriftafu"
 
 # Global frame buffer
 current_frame = None
@@ -170,8 +165,10 @@ def process_frame(frame):
 
 def stream_processor():
     global current_frame
+    failed_frames = 0  # Counter for consecutive failed frames
+    
     try:
-        while True:  # Add retry loop
+        while True:
             try:
                 # Get the stream URL
                 stream_url = get_stream_url(STREAMER_NAME)
@@ -186,84 +183,145 @@ def stream_processor():
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 cap.set(cv2.CAP_PROP_FPS, 30)
                 
-                break  # Break the retry loop if successful
+                # Reset failed frames counter on successful connection
+                failed_frames = 0
+                
+                # Set target frame time (1/30 second for 30 FPS)
+                target_frame_time = 1/30
+                
+                # Create named windows and position them
+                cv2.namedWindow("64x36 Pixel Art", cv2.WINDOW_NORMAL)
+                cv2.namedWindow("480x270 Reference", cv2.WINDOW_NORMAL)
+                
+                # Position windows side by side
+                cv2.moveWindow("64x36 Pixel Art", 100, 100)
+                cv2.moveWindow("480x270 Reference", 800, 100)
+                
+                print("Starting stream rendering...")
+                while True:
+                    start_time = time.time()
+
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        print("Failed to read frame")
+                        failed_frames += 1
+                        if failed_frames >= 100:
+                            print("Stream appears to be down, reinitializing...")
+                            cap.release()
+                            break
+                        continue
+
+                    # Reset failed frames counter on successful frame
+                    failed_frames = 0
+
+                    reference_frame, display_frame, rgb_frame, pixel_data = process_frame(frame)
+                    if reference_frame is None:
+                        continue
+
+                    # Update the current frame buffer
+                    with frame_lock:
+                        current_frame = rgb_frame
+
+                    # Show frames
+                    cv2.imshow("64x36 Pixel Art", display_frame)
+                    cv2.imshow("480x270 Reference", reference_frame)
+
+                    # Break on 'q' key
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        return
+
+                    # Frame rate limiting
+                    elapsed_time = time.time() - start_time
+                    sleep_time = target_frame_time - elapsed_time
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+
+                    actual_elapsed = time.time() - start_time
+                    fps = 1 / actual_elapsed
+                    print(f"Current FPS: {fps:.2f}", end='\r')
+
             except Exception as e:
-                print(f"Error initializing stream: {e}")
-                print("Retrying in 5 seconds...")
-                time.sleep(5)
-
-        # Set target frame time (1/30 second for 30 FPS)
-        target_frame_time = 1/30
-        
-        # Create named windows and position them
-        cv2.namedWindow("64x36 Pixel Art", cv2.WINDOW_NORMAL)
-        cv2.namedWindow("480x270 Reference", cv2.WINDOW_NORMAL)
-        
-        # Position windows side by side
-        cv2.moveWindow("64x36 Pixel Art", 100, 100)
-        cv2.moveWindow("480x270 Reference", 800, 100)
-        
-        print("Starting stream rendering...")
-        while True:
-            start_time = time.time()
-
-            # Read frame from stream
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                print("Failed to read frame")
+                print(f"Error in stream processing: {e}")
+                if 'cap' in locals():
+                    cap.release()
+                time.sleep(5)  # Wait before retrying
                 continue
-
-            # Process frame
-            reference_frame, display_frame, rgb_frame, pixel_data = process_frame(frame)
-            if reference_frame is None:
-                continue
-
-            # Update the current frame buffer
-            with frame_lock:
-                current_frame = rgb_frame
-
-            # Show frames
-            cv2.imshow("64x36 Pixel Art", display_frame)
-            cv2.imshow("480x270 Reference", reference_frame)
-
-            # Break on 'q' key
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-            # Frame rate limiting
-            elapsed_time = time.time() - start_time
-            sleep_time = target_frame_time - elapsed_time
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-            # Framerate calculation (after sleeping)
-            actual_elapsed = time.time() - start_time
-            fps = 1 / actual_elapsed
-            print(f"Current FPS: {fps:.2f}", end='\r')
-
-        cap.release()
-        cv2.destroyAllWindows()
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Fatal error in stream processor: {e}")
+        if 'cap' in locals():
+            cap.release()
+        cv2.destroyAllWindows()
 
 
-@app.route('/frame')
+@app.route('/frame.json')
 def get_frame():
-    """Return current frame as RGB values"""
+    """Return current frame as compact binary data"""
     with frame_lock:
         if current_frame is None:
             return jsonify({'error': 'No frame available'}), 404
-        return jsonify({
-            'frame': current_frame,
+            
+        # Convert RGB values to 8-bit color indices directly
+        compact_frame = []
+        for y in range(32):
+            row = []
+            for x in range(64):
+                r, g, b = current_frame[y][x]
+                # Pack RGB into single 8-bit value
+                color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
+                row.append(color)
+            compact_frame.append(row)
+            
+        response_data = {
+            'frame': compact_frame,
             'width': 64,
             'height': 32
-        })
+        }
+
+        # TEMP TESTING TO SEE IF MC IS OVERLOADED
+        response_data = { 'Testing': datetime.now().isoformat() }
+
+        response = make_response(jsonify(response_data))
+        
+        # Simplified headers for ESP32
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Connection'] = 'close'  # Force connection close
+        response.headers['Cache-Control'] = 'no-cache'
+        
+        return response
 
 @app.route('/watch')
 def watch():
     """Debug page to watch the stream processing"""
     return render_template('watch.html')
+
+@app.route('/video_feed')
+def video_feed():
+    """Video streaming route."""
+    def generate():
+        while True:
+            with frame_lock:
+                if current_frame is not None:
+                    # Convert current_frame back to numpy array
+                    frame_array = np.array(current_frame, dtype=np.uint8)
+                    frame_array = frame_array.reshape((32, 64, 3))
+                    
+                    # Scale up for display
+                    display_frame = cv2.resize(frame_array, (640, 320), 
+                                            interpolation=cv2.INTER_NEAREST)
+                    
+                    # Convert to BGR for cv2.imencode
+                    display_frame = cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR)
+                    
+                    ret, buffer = cv2.imencode('.jpg', display_frame)
+                    if ret:
+                        frame_bytes = buffer.tobytes()
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.1)
+
+    return Response(generate(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
     # Start stream processor in background
