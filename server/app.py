@@ -241,22 +241,21 @@ def get_frame():
         if current_frame is None:
             return jsonify({'error': 'No frame available'}), 404
             
-        # Convert RGB values to 18-bit color (6-6-6)
-        compact_frame = []
+        # Convert RGB values to 6-bit per channel and flatten the array
+        flat_frame = []
         for y in range(32):
-            row = []
             for x in range(64):
                 r, g, b = current_frame[y][x]
-                # Pack RGB into three 6-bit values
+                # Convert to 6-bit per channel
                 r6 = r >> 2  # Convert 8-bit to 6-bit (0-63)
                 g6 = g >> 2
                 b6 = b >> 2
-                # Pack into array as separate 6-bit values
-                row.append([r6, g6, b6])
-            compact_frame.append(row)
+                # Pack into a single value (18-bit total)
+                color = (r6 << 12) | (g6 << 6) | b6
+                flat_frame.append(color)
             
         response_data = {
-            'frame': compact_frame,
+            'frame': flat_frame,  # Single flat array
             'width': 64,
             'height': 32,
             'bit_depth': 6
