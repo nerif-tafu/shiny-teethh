@@ -524,8 +524,12 @@ def get_frame():
                     row = []
                     for x in range(64):
                         r, g, b = current_image[y][x]
+                        # Convert numpy integers to Python integers
+                        r = int(r)
+                        g = int(g)
+                        b = int(b)
                         color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
-                        row.append(color)
+                        row.append(int(color))  # Ensure color is also a Python integer
                     compact_frame.append(row)
                 
                 response_data = {
@@ -569,8 +573,12 @@ def get_frame():
                         row = []
                         for x in range(64):
                             r, g, b = current_frame[y][x]
+                            # Convert numpy integers to Python integers
+                            r = int(r)
+                            g = int(g)
+                            b = int(b)
                             color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
-                            row.append(color)
+                            row.append(int(color))  # Ensure color is also a Python integer
                         compact_frame.append(row)
                         
                     response_data = {
