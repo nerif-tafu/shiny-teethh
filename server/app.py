@@ -6,7 +6,7 @@ import threading
 import time
 import requests
 import cv2
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageSequence
 from io import BytesIO
 import warnings
 import os
@@ -46,6 +46,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 display_mode = "stream"  # or "image"
 current_image = None
 image_lock = threading.Lock()
+
+# Add new global variables for GIF handling
+gif_frames = None
+current_gif_frame = 0
+last_frame_time = 0
+gif_frame_duration = 0.1  # Default frame duration in seconds
+gif_lock = threading.Lock()
+
+# Add this to your global variables
+active_image_id = None
 
 class StickyLogger:
     def __init__(self):
@@ -422,7 +432,7 @@ def set_mode():
 
 @app.route('/select_image', methods=['POST'])
 def select_image():
-    global current_image
+    global current_image, gif_frames, current_gif_frame, gif_frame_duration, active_image_id
     data = request.json
     image_id = data.get('id')
     
@@ -430,78 +440,157 @@ def select_image():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], image_id)
         if os.path.exists(filepath):
             with image_lock:
-                # Open and convert image to RGB
+                # Set the active image ID
+                active_image_id = image_id
+                
+                # Open image
                 img = Image.open(filepath)
-                img = img.convert('RGB')
                 
-                # Get original dimensions
-                width, height = img.size
-                
-                # Calculate target dimensions maintaining aspect ratio
-                target_width = 64
-                target_height = 32
-                
-                # Calculate scaling factors
-                scale_w = target_width / width
-                scale_h = target_height / height
-                scale = min(scale_w, scale_h)
-                
-                # Calculate new dimensions
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                
-                # Resize image maintaining aspect ratio
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                # Create black background
-                background = Image.new('RGB', (target_width, target_height), (0, 0, 0))
-                
-                # Calculate position to center the image
-                x = (target_width - new_width) // 2
-                y = (target_height - new_height) // 2
-                
-                # Paste resized image onto black background
-                background.paste(img, (x, y))
-                
-                # Convert to numpy array for display
-                current_image = np.array(background)
+                # Check if it's a GIF
+                if getattr(img, "is_animated", False):
+                    # Extract all frames from GIF
+                    gif_frames = []
+                    durations = []
+                    
+                    for frame in ImageSequence.Iterator(img):
+                        # Convert frame to RGB and resize maintaining aspect ratio
+                        frame = frame.convert('RGB')
+                        
+                        # Get original dimensions
+                        width, height = frame.size
+                        
+                        # Calculate target dimensions maintaining aspect ratio
+                        target_width = 64
+                        target_height = 32
+                        
+                        # Calculate scaling factors
+                        scale_w = target_width / width
+                        scale_h = target_height / height
+                        scale = min(scale_w, scale_h)
+                        
+                        # Calculate new dimensions
+                        new_width = int(width * scale)
+                        new_height = int(height * scale)
+                        
+                        # Resize frame
+                        frame = frame.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        
+                        # Create black background
+                        background = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+                        
+                        # Calculate position to center the frame
+                        x = (target_width - new_width) // 2
+                        y = (target_height - new_height) // 2
+                        
+                        # Paste resized frame onto black background
+                        background.paste(frame, (x, y))
+                        
+                        # Convert to numpy array and append to frames list
+                        gif_frames.append(np.array(background))
+                        
+                        # Get frame duration in seconds (convert from milliseconds)
+                        duration = frame.info.get('duration', 100) / 1000.0
+                        durations.append(duration)
+                    
+                    # Calculate average frame duration
+                    gif_frame_duration = sum(durations) / len(durations)
+                    current_gif_frame = 0
+                    current_image = gif_frames[0]
+                    
+                else:
+                    # Handle static image as before
+                    gif_frames = None
+                    current_gif_frame = 0
+                    
+                    # Process static image as before...
+                    width, height = img.size
+                    img = img.convert('RGB')
+                    
+                    # Calculate target dimensions maintaining aspect ratio
+                    target_width = 64
+                    target_height = 32
+                    
+                    scale_w = target_width / width
+                    scale_h = target_height / height
+                    scale = min(scale_w, scale_h)
+                    
+                    new_width = int(width * scale)
+                    new_height = int(height * scale)
+                    
+                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    background = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+                    x = (target_width - new_width) // 2
+                    y = (target_height - new_height) // 2
+                    background.paste(img, (x, y))
+                    current_image = np.array(background)
     
     return jsonify({'status': 'ok'})
 
-# Modify your video_feed function to handle image mode
+# Modify the frame generation to handle GIF animation
 def generate_frames():
+    global current_gif_frame, last_frame_time
+    
     while True:
-        if display_mode == "image" and current_image is not None:
-            with image_lock:
-                frame_array = current_image
-        else:
-            # Your existing frame generation code...
-            with status_lock:
-                current_status = stream_status
-            
-            with frame_lock:
-                if current_status == "offline":
-                    frame_data = create_text_frame(f"{Config.STREAMER_NAME} is offline")
-                    frame_array = np.array(frame_data, dtype=np.uint8)
-                    frame_array = np.stack([frame_array] * 3, axis=-1)
-                elif current_frame is None:
-                    frame_data = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
-                    frame_array = np.array(frame_data, dtype=np.uint8)
-                    frame_array = np.stack([frame_array] * 3, axis=-1)
-                else:
-                    frame_array = np.array(current_frame, dtype=np.uint8)
-                    frame_array = frame_array.reshape((32, 64, 3))
+        # Initialize frame_array with a default black frame
+        frame_array = np.zeros((32, 64, 3), dtype=np.uint8)
+        
+        try:
+            if display_mode == "image":
+                with image_lock:
+                    if gif_frames is not None:
+                        # Check if it's time to advance to next frame
+                        current_time = time.time()
+                        if current_time - last_frame_time >= gif_frame_duration:
+                            current_gif_frame = (current_gif_frame + 1) % len(gif_frames)
+                            last_frame_time = current_time
+                        frame_array = gif_frames[current_gif_frame]
+                    elif current_image is not None:
+                        frame_array = current_image
+            else:
+                # Stream handling code
+                with status_lock:
+                    current_status = stream_status
+                
+                with frame_lock:
+                    if current_status == "offline":
+                        frame_data = create_text_frame(f"{Config.STREAMER_NAME} is offline")
+                        frame_array = np.array(frame_data, dtype=np.uint8)
+                        frame_array = np.stack([frame_array] * 3, axis=-1)
+                    elif current_frame is None:
+                        frame_data = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
+                        frame_array = np.array(frame_data, dtype=np.uint8)
+                        frame_array = np.stack([frame_array] * 3, axis=-1)
+                    else:
+                        frame_array = np.array(current_frame, dtype=np.uint8)
+                        frame_array = frame_array.reshape((32, 64, 3))
 
-        # Scale up for display
-        display_frame = cv2.resize(frame_array, (640, 320), interpolation=cv2.INTER_NEAREST)
-        display_frame = cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR)
-        
-        ret, buffer = cv2.imencode('.jpg', display_frame)
-        if ret:
-            frame_bytes = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        
+            # Scale up for display
+            display_frame = cv2.resize(frame_array, (640, 320), interpolation=cv2.INTER_NEAREST)
+            display_frame = cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR)
+            
+            ret, buffer = cv2.imencode('.jpg', display_frame)
+            if ret:
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+        except Exception as e:
+            app.logger.error(f"Error in generate_frames: {str(e)}")
+            # On error, display an error message
+            try:
+                error_frame = create_text_frame("Display Error")
+                frame_array = np.array(error_frame, dtype=np.uint8)
+                frame_array = np.stack([frame_array] * 3, axis=-1)
+                display_frame = cv2.resize(frame_array, (640, 320), interpolation=cv2.INTER_NEAREST)
+                display_frame = cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR)
+                ret, buffer = cv2.imencode('.jpg', display_frame)
+                if ret:
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            except:
+                pass  # If even error display fails, skip this frame
+                
         time.sleep(0.1)
 
 @app.route('/video_feed')
@@ -512,24 +601,36 @@ def video_feed():
 @app.route('/frame.json')
 def get_frame():
     """Return current frame as compact binary data"""
-    global display_mode, current_image
+    global display_mode, current_image, current_gif_frame, last_frame_time
     
     # Check if we're in image mode and have an image to display
-    if display_mode == "image" and current_image is not None:
+    if display_mode == "image":
         with image_lock:
             try:
-                # Convert RGB values to 8-bit color indices directly
+                # Handle GIF animation
+                if gif_frames is not None:
+                    # Check if it's time to advance to next frame
+                    current_time = time.time()
+                    if current_time - last_frame_time >= gif_frame_duration:
+                        current_gif_frame = (current_gif_frame + 1) % len(gif_frames)
+                        last_frame_time = current_time
+                    frame_array = gif_frames[current_gif_frame]
+                elif current_image is not None:
+                    frame_array = current_image
+                else:
+                    raise ValueError("No image data available")
+
+                # Convert RGB values to 8-bit color indices
                 compact_frame = []
                 for y in range(32):
                     row = []
                     for x in range(64):
-                        r, g, b = current_image[y][x]
-                        # Convert numpy integers to Python integers
+                        r, g, b = frame_array[y][x]
                         r = int(r)
                         g = int(g)
                         b = int(b)
                         color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
-                        row.append(int(color))  # Ensure color is also a Python integer
+                        row.append(int(color))
                     compact_frame.append(row)
                 
                 response_data = {
@@ -537,8 +638,8 @@ def get_frame():
                     'width': 64,
                     'height': 32
                 }
-            except (TypeError, IndexError):
-                # Fallback to offline message if image processing fails
+            except Exception as e:
+                # Fallback to error message if image processing fails
                 offline_frame = create_text_frame("Image display error")
                 response_data = {
                     'frame': offline_frame,
@@ -611,8 +712,40 @@ def watch():
 def get_mode():
     return jsonify({
         'mode': display_mode,
-        'current_image': current_image is not None
+        'current_image': current_image is not None,
+        'active_image_id': active_image_id
     })
+
+@app.route('/delete_image', methods=['POST'])
+def delete_image():
+    global current_image, gif_frames, active_image_id
+    data = request.json
+    image_id = data.get('id')
+    
+    if image_id:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], image_id)
+        thumb_filepath = os.path.join(app.config['UPLOAD_FOLDER'], f'thumb_{image_id}')
+        
+        try:
+            # If this is the currently displayed image, clear it
+            if current_image is not None:
+                with image_lock:
+                    if os.path.samefile(filepath, os.path.join(app.config['UPLOAD_FOLDER'], image_id)):
+                        current_image = None
+                        gif_frames = None
+                        active_image_id = None  # Clear the active image ID
+            
+            # Delete both the original and thumbnail files
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            if os.path.exists(thumb_filepath):
+                os.remove(thumb_filepath)
+                
+            return jsonify({'status': 'ok'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+            
+    return jsonify({'error': 'No image ID provided'}), 400
 
 if __name__ == '__main__':
     # Start stream processor in background
