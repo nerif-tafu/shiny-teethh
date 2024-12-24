@@ -4,9 +4,14 @@ import busio
 import adafruit_connection_manager
 import adafruit_requests
 import gc
+import displayio
+from adafruit_matrixportal.matrix import Matrix
 from adafruit_esp32spi import adafruit_esp32spi
 from os import getenv
 from digitalio import DigitalInOut
+
+# Release any resources currently in use for the displays
+displayio.release_displays()
 
 try:
     from secrets import secrets
@@ -15,6 +20,27 @@ except ImportError:
     raise
 
 JSON_URL = secrets["server_url"]
+
+# Initialize display
+matrix = Matrix(width=64, height=32, bit_depth=4)
+display = matrix.display
+
+# Create bitmap and display group
+bitmap = displayio.Bitmap(64, 32, 256)  # 8-bit color
+palette = displayio.Palette(256)
+
+# Initialize all palette colors
+for i in range(256):
+    r = (i & 0xE0)  # Red: bits 7-5
+    g = (i & 0x1C) << 3  # Green: bits 4-2
+    b = (i & 0x03) << 6  # Blue: bits 1-0
+    palette[i] = (r, g, b)
+
+# Create the display group and add the bitmap
+tile_grid = displayio.TileGrid(bitmap, pixel_shader=palette)
+group = displayio.Group()
+group.append(tile_grid)
+display.root_group = group
 
 # If you are using a board with pre-defined ESP32 Pins:
 esp32_cs = DigitalInOut(board.ESP_CS)
@@ -48,6 +74,26 @@ while not esp.is_connected:
         print("Could not connect to AP, retrying: ", e)
         continue
 print("Connected to", esp.ap_info.ssid, "\tRSSI:", esp.ap_info.rssi)
+
+def update_display(frame_data):
+    """Update the display with new frame data"""
+    if frame_data is None or 'frame' not in frame_data:
+        return
+    
+    try:
+        # Get the frame array from the response
+        frame_array = frame_data['frame']
+        
+        for y in range(32):
+            for x in range(64):
+                # Get the color value from the frame array
+                color = frame_array[y][x]
+                # Ensure color value is within valid range
+                color = min(max(color, 0), 255)
+                bitmap[x, y] = color
+                
+    except Exception as e:
+        print(f"Display update error: {type(e).__name__}: {str(e)}")
 
 def fetch_json(url):
     # Get a connection manager instance for our socket pool
@@ -88,6 +134,15 @@ def fetch_json(url):
 
 # Main loop
 while True:
-    fetch_json(JSON_URL)
-    # Small delay to prevent overwhelming the network
+    try:
+        # Fetch JSON data from server
+        json_data = fetch_json(JSON_URL)
+        if json_data and isinstance(json_data, dict):
+            if 'frame' in json_data:
+                update_display(json_data)
+            else:
+                print("No frame data in response")
+    except Exception as e:
+        print(f"Main loop error: {type(e).__name__}: {str(e)}")
+    
     time.sleep(0.1)
