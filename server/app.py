@@ -12,8 +12,10 @@ import warnings
 import os
 import logging
 from datetime import datetime, timedelta
+from config import Config
 
 app = Flask(__name__)
+app.config.from_object(Config)
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -22,21 +24,16 @@ warnings.filterwarnings('ignore')
 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'loglevel;quiet'
 logging.getLogger('streamlink.stream.ffmpegmux').setLevel(logging.ERROR)
 
-# Twitch API credentials
-CLIENT_ID = "zcpmf7lgoc4om8aruf9k9c9zrfvujh"
-CLIENT_SECRET = "4e3gh2otu25e055kwksqvmfgx9vm44"
-STREAMER_NAME = "neriftafu"
-
 # Global frame buffer
 current_frame = None
 frame_lock = threading.Lock()
 
-def get_twitch_access_token(client_id, client_secret):
+def get_twitch_access_token():
     """Fetch OAuth access token from Twitch API."""
     url = "https://id.twitch.tv/oauth2/token"
     params = {
-        "client_id": client_id,
-        "client_secret": client_secret,
+        "client_id": Config.CLIENT_ID,
+        "client_secret": Config.CLIENT_SECRET,
         "grant_type": "client_credentials"
     }
     response = requests.post(url, params=params)
@@ -170,8 +167,8 @@ def stream_processor():
     try:
         while True:
             try:
-                # Get the stream URL
-                stream_url = get_stream_url(STREAMER_NAME)
+                # Get the stream URL using config
+                stream_url = get_stream_url(Config.STREAMER_NAME)
                 print(f"Stream URL obtained, starting capture...")
 
                 # Open video capture with specific options
@@ -189,15 +186,7 @@ def stream_processor():
                 # Set target frame time (1/30 second for 30 FPS)
                 target_frame_time = 1/30
                 
-                # Create named windows and position them
-                cv2.namedWindow("64x36 Pixel Art", cv2.WINDOW_NORMAL)
-                cv2.namedWindow("480x270 Reference", cv2.WINDOW_NORMAL)
-                
-                # Position windows side by side
-                cv2.moveWindow("64x36 Pixel Art", 100, 100)
-                cv2.moveWindow("480x270 Reference", 800, 100)
-                
-                print("Starting stream rendering...")
+                print("Starting stream processing...")
                 while True:
                     start_time = time.time()
 
@@ -222,14 +211,6 @@ def stream_processor():
                     with frame_lock:
                         current_frame = rgb_frame
 
-                    # Show frames
-                    cv2.imshow("64x36 Pixel Art", display_frame)
-                    cv2.imshow("480x270 Reference", reference_frame)
-
-                    # Break on 'q' key
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        return
-
                     # Frame rate limiting
                     elapsed_time = time.time() - start_time
                     sleep_time = target_frame_time - elapsed_time
@@ -251,7 +232,6 @@ def stream_processor():
         print(f"Fatal error in stream processor: {e}")
         if 'cap' in locals():
             cap.release()
-        cv2.destroyAllWindows()
 
 
 @app.route('/frame.json')
@@ -279,7 +259,7 @@ def get_frame():
         }
 
         # TEMP TESTING TO SEE IF MC IS OVERLOADED
-        response_data = { 'Testing': datetime.now().isoformat() }
+        # response_data = { 'Testing': datetime.now().isoformat() }
 
         response = make_response(jsonify(response_data))
         

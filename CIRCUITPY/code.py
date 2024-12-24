@@ -1,82 +1,93 @@
-# SPDX-FileCopyrightText: 2021 Adafruit Industries
-# SPDX-License-Identifier: MIT
-
-import struct
-import time
-from os import getenv
 import board
+import time
 import busio
-from digitalio import DigitalInOut
+import adafruit_connection_manager
+import adafruit_requests
+import gc
 from adafruit_esp32spi import adafruit_esp32spi
-import adafruit_esp32spi.adafruit_esp32spi_socketpool as socketpool
+from os import getenv
+from digitalio import DigitalInOut
 
-# Get wifi details and more from a settings.toml file
-# tokens used by this Demo: CIRCUITPY_WIFI_SSID, CIRCUITPY_WIFI_PASSWORD
-secrets = {
-    "ssid": getenv("CIRCUITPY_WIFI_SSID"),
-    "password": getenv("CIRCUITPY_WIFI_PASSWORD"),
-}
-if secrets == {"ssid": None, "password": None}:
-    try:
-        # Fallback on secrets.py until depreciation is over and option is removed
-        from secrets import secrets  # pylint: disable=no-name-in-module
-    except ImportError:
-        print("WiFi secrets are kept in settings.toml, please add them there!")
-        raise
+try:
+    from secrets import secrets
+except ImportError:
+    print("WiFi secrets are kept in secrets.py, please add them there!")
+    raise
 
-TIMEOUT = 5
-# edit host and port to match server
-HOST = "pool.ntp.org"
-PORT = 123
-NTP_TO_UNIX_EPOCH = 2208988800  # 1970-01-01 00:00:00
+JSON_URL = secrets["server_url"]
+
+# If you are using a board with pre-defined ESP32 Pins:
+esp32_cs = DigitalInOut(board.ESP_CS)
+esp32_ready = DigitalInOut(board.ESP_BUSY)
+esp32_reset = DigitalInOut(board.ESP_RESET)
 
 # Secondary (SCK1) SPI used to connect to WiFi board on Arduino Nano Connect RP2040
 if "SCK1" in dir(board):
     spi = busio.SPI(board.SCK1, board.MOSI1, board.MISO1)
 else:
-    if "SPI" in dir(board):
-        spi = board.SPI()
-    else:
-        spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
-# PyPortal or similar; edit pins as needed
-esp32_cs = DigitalInOut(board.ESP_CS)
-esp32_ready = DigitalInOut(board.ESP_BUSY)
-esp32_reset = DigitalInOut(board.ESP_RESET)
+    spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
 esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
 
-# connect to wifi AP
-esp.connect(secrets)
+pool = adafruit_connection_manager.get_radio_socketpool(esp)
+ssl_context = adafruit_connection_manager.get_radio_ssl_context(esp)
+requests = adafruit_requests.Session(pool, ssl_context)
 
-# test for connectivity to server
-print("Server ping:", esp.ping(HOST), "ms")
+if esp.status == adafruit_esp32spi.WL_IDLE_STATUS:
+    print("ESP32 found and in idle mode")
+print("Firmware vers.", esp.firmware_version)
+print("MAC addr:", ":".join("%02X" % byte for byte in esp.MAC_address))
 
-# After ESP connection and server ping test:
-while True:
+for ap in esp.scan_networks():
+    print("\t%-23s RSSI: %d" % (ap.ssid, ap.rssi))
+
+print("Connecting to AP...")
+while not esp.is_connected:
     try:
-        # create the socket
-        pool = socketpool.SocketPool(esp)
-        socketaddr = pool.getaddrinfo(HOST, PORT)[0][4]
-        s = pool.socket(type=pool.SOCK_DGRAM)
-        s.settimeout(TIMEOUT)
-
-        print("Sending")
-        s.connect(socketaddr, conntype=esp.UDP_MODE)
-        packet = bytearray(48)
-        packet[0] = 0b00100011  # Not leap second, NTP version 4, Client mode
-        s.send(packet)
-
-        print("Receiving")
-        packet = s.recv(48)
-        seconds = struct.unpack_from("!I", packet, offset=len(packet) - 8)[0]
-        print("Time:", time.localtime(seconds - NTP_TO_UNIX_EPOCH))
-        
-        # Close the socket after each request
-        s.close()
-        
-        # Add a delay between requests (adjust as needed)
-        time.sleep(1)
-        
-    except Exception as e:
-        print("Error occurred:", e)
-        time.sleep(1)  # Wait before retrying on error
+        esp.connect_AP(secrets["ssid"], secrets["password"])
+    except OSError as e:
+        print("Could not connect to AP, retrying: ", e)
         continue
+print("Connected to", esp.ap_info.ssid, "\tRSSI:", esp.ap_info.rssi)
+
+def fetch_json(url):
+    # Get a connection manager instance for our socket pool
+    connection_manager = adafruit_connection_manager.get_connection_manager(pool)
+    
+    try:
+        free_mem = gc.mem_free()
+        print("")
+        print("Current mem free:", free_mem, "bytes")
+        print("-" * 40)
+        print("Fetching json from", url)
+        
+        # Make the request and store response
+        response = requests.get(url)
+        json_data = response.json()
+        print("-" * 40)
+        print(json_data)
+        print("-" * 40)
+        
+        return json_data
+        
+    except Exception as error:
+        print("Error:", error)
+        if 'response' in locals():
+            print(response)
+        return None
+        
+    finally:
+        # Clean up resources
+        if 'response' in locals():
+            response.close()
+            # Mark the socket as available for reuse
+            try:
+                connection_manager.free_socket(response.socket)
+            except RuntimeError:
+                pass
+        gc.collect()
+
+# Main loop
+while True:
+    fetch_json(JSON_URL)
+    # Small delay to prevent overwhelming the network
+    time.sleep(0.1)

@@ -84,7 +84,7 @@
         
         async function updateData() {
             try {
-                const response = await fetch('/frame');
+                const response = await fetch('/frame.json');
                 const data = await response.json();
                 frameData.textContent = JSON.stringify(data, null, 2);
             } catch (error) {
