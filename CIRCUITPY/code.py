@@ -88,8 +88,6 @@ def update_display(frame_data):
             for x in range(64):
                 # Get the color value from the frame array
                 color = frame_array[y][x]
-                # Ensure color value is within valid range
-                color = min(max(color, 0), 255)
                 bitmap[x, y] = color
                 
     except Exception as e:
@@ -100,18 +98,9 @@ def fetch_json(url):
     connection_manager = adafruit_connection_manager.get_connection_manager(pool)
     
     try:
-        free_mem = gc.mem_free()
-        print("")
-        print("Current mem free:", free_mem, "bytes")
-        print("-" * 40)
-        print("Fetching json from", url)
-        
         # Make the request and store response
         response = requests.get(url)
         json_data = response.json()
-        print("-" * 40)
-        print(json_data)
-        print("-" * 40)
         
         return json_data
         
@@ -137,6 +126,7 @@ while True:
     try:
         # Fetch JSON data from server
         json_data = fetch_json(JSON_URL)
+        print("Fetched frame.")
         if json_data and isinstance(json_data, dict):
             if 'frame' in json_data:
                 update_display(json_data)
