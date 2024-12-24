@@ -21,6 +21,10 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 app.config.from_object(Config)
 
+# Add file upload configurations
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024  # 64MB max file size
+app.config['UPLOAD_FOLDER'] = 'uploads'
+
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
@@ -35,12 +39,10 @@ frame_lock = threading.Lock()
 status_lock = threading.Lock()  # New lock for status updates
 
 # Add these configurations
-UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Create uploads directory if it doesn't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Global variables for image mode
 display_mode = "stream"  # or "image"
