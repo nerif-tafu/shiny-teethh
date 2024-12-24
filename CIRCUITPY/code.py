@@ -22,7 +22,7 @@ except ImportError:
 JSON_URL = secrets["server_url"]
 
 # Initialize display
-matrix = Matrix(width=64, height=32, bit_depth=4)
+matrix = Matrix(width=64, height=32, bit_depth=6)
 display = matrix.display
 
 # Create bitmap and display group
@@ -86,11 +86,20 @@ def update_display(frame_data):
         
         for y in range(32):
             for x in range(64):
-                # Get the color value from the frame array
-                color = frame_array[y][x]
-                # Ensure color value is within valid range
-                color = min(max(color, 0), 255)
-                bitmap[x, y] = color
+                # Get the RGB components (now 6-bit values)
+                r6, g6, b6 = frame_array[y][x]
+                
+                # Scale up to 8-bit values for the palette
+                r = (r6 * 255) // 63  # Scale 6-bit (0-63) to 8-bit (0-255)
+                g = (g6 * 255) // 63
+                b = (b6 * 255) // 63
+                
+                # Set the color in the palette
+                color_index = (y * 64) + x
+                palette[color_index] = (r, g, b)
+                
+                # Update the bitmap with the color index
+                bitmap[x, y] = color_index
                 
     except Exception as e:
         print(f"Display update error: {type(e).__name__}: {str(e)}")
@@ -144,5 +153,3 @@ while True:
                 print("No frame data in response")
     except Exception as e:
         print(f"Main loop error: {type(e).__name__}: {str(e)}")
-    
-    time.sleep(0.1)
