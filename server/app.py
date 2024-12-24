@@ -241,29 +241,31 @@ def get_frame():
         if current_frame is None:
             return jsonify({'error': 'No frame available'}), 404
             
-        # Convert RGB values to 6-bit per channel and flatten the array
-        flat_frame = []
+        # Convert RGB values to 8-bit color indices directly
+        compact_frame = []
         for y in range(32):
+            row = []
             for x in range(64):
                 r, g, b = current_frame[y][x]
-                # Convert to 6-bit per channel
-                r6 = r >> 2  # Convert 8-bit to 6-bit (0-63)
-                g6 = g >> 2
-                b6 = b >> 2
-                # Pack into a single value (18-bit total)
-                color = (r6 << 12) | (g6 << 6) | b6
-                flat_frame.append(color)
+                # Pack RGB into single 8-bit value
+                color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
+                row.append(color)
+            compact_frame.append(row)
             
         response_data = {
-            'frame': flat_frame,  # Single flat array
+            'frame': compact_frame,
             'width': 64,
-            'height': 32,
-            'bit_depth': 6
+            'height': 32
         }
 
+        # TEMP TESTING TO SEE IF MC IS OVERLOADED
+        # response_data = { 'Testing': datetime.now().isoformat() }
+
         response = make_response(jsonify(response_data))
+        
+        # Simplified headers for ESP32
         response.headers['Content-Type'] = 'application/json'
-        response.headers['Connection'] = 'close'
+        response.headers['Connection'] = 'close'  # Force connection close
         response.headers['Cache-Control'] = 'no-cache'
         
         return response

@@ -81,27 +81,16 @@ def update_display(frame_data):
         return
     
     try:
-        # Get the flattened frame array
+        # Get the frame array from the response
         frame_array = frame_data['frame']
         
-        for i, packed_color in enumerate(frame_array):
-            # Unpack the 18-bit color value
-            r6 = (packed_color >> 12) & 0x3F  # Extract red (6 bits)
-            g6 = (packed_color >> 6) & 0x3F   # Extract green (6 bits)
-            b6 = packed_color & 0x3F          # Extract blue (6 bits)
-            
-            # Scale up to 8-bit values
-            r = (r6 * 255) // 63
-            g = (g6 * 255) // 63
-            b = (b6 * 255) // 63
-            
-            # Calculate x,y from index
-            x = i % 64
-            y = i // 64
-            
-            # Update the palette and bitmap
-            palette[i] = (r, g, b)
-            bitmap[x, y] = i
+        for y in range(32):
+            for x in range(64):
+                # Get the color value from the frame array
+                color = frame_array[y][x]
+                # Ensure color value is within valid range
+                color = min(max(color, 0), 255)
+                bitmap[x, y] = color
                 
     except Exception as e:
         print(f"Display update error: {type(e).__name__}: {str(e)}")
