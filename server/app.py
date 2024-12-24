@@ -512,56 +512,87 @@ def video_feed():
 @app.route('/frame.json')
 def get_frame():
     """Return current frame as compact binary data"""
-    with status_lock:
-        current_status = stream_status
+    global display_mode, current_image
     
-    with frame_lock:
-        if current_status == "offline":
-            offline_frame = create_text_frame(f"{Config.STREAMER_NAME} is offline")
-            response_data = {
-                'frame': offline_frame,
-                'width': 64,
-                'height': 32
-            }
-        elif current_frame is None or current_status == "connecting":
-            connecting_frame = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
-            response_data = {
-                'frame': connecting_frame,
-                'width': 64,
-                'height': 32
-            }
-        else:
+    # Check if we're in image mode and have an image to display
+    if display_mode == "image" and current_image is not None:
+        with image_lock:
             try:
                 # Convert RGB values to 8-bit color indices directly
                 compact_frame = []
                 for y in range(32):
                     row = []
                     for x in range(64):
-                        r, g, b = current_frame[y][x]
+                        r, g, b = current_image[y][x]
                         color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
                         row.append(color)
                     compact_frame.append(row)
-                    
+                
                 response_data = {
                     'frame': compact_frame,
                     'width': 64,
                     'height': 32
                 }
             except (TypeError, IndexError):
-                # If there's any error processing the frame, show connecting message
+                # Fallback to offline message if image processing fails
+                offline_frame = create_text_frame("Image display error")
+                response_data = {
+                    'frame': offline_frame,
+                    'width': 64,
+                    'height': 32
+                }
+    else:
+        # Original stream handling logic
+        with status_lock:
+            current_status = stream_status
+        
+        with frame_lock:
+            if current_status == "offline":
+                offline_frame = create_text_frame(f"{Config.STREAMER_NAME} is offline")
+                response_data = {
+                    'frame': offline_frame,
+                    'width': 64,
+                    'height': 32
+                }
+            elif current_frame is None or current_status == "connecting":
                 connecting_frame = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
                 response_data = {
                     'frame': connecting_frame,
                     'width': 64,
                     'height': 32
                 }
+            else:
+                try:
+                    # Convert RGB values to 8-bit color indices directly
+                    compact_frame = []
+                    for y in range(32):
+                        row = []
+                        for x in range(64):
+                            r, g, b = current_frame[y][x]
+                            color = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)
+                            row.append(color)
+                        compact_frame.append(row)
+                        
+                    response_data = {
+                        'frame': compact_frame,
+                        'width': 64,
+                        'height': 32
+                    }
+                except (TypeError, IndexError):
+                    # If there's any error processing the frame, show connecting message
+                    connecting_frame = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
+                    response_data = {
+                        'frame': connecting_frame,
+                        'width': 64,
+                        'height': 32
+                    }
 
-        response = make_response(jsonify(response_data))
-        response.headers['Content-Type'] = 'application/json'
-        response.headers['Connection'] = 'close'
-        response.headers['Cache-Control'] = 'no-cache'
-        
-        return response
+    response = make_response(jsonify(response_data))
+    response.headers['Content-Type'] = 'application/json'
+    response.headers['Connection'] = 'close'
+    response.headers['Cache-Control'] = 'no-cache'
+    
+    return response
 
 @app.route('/')
 def watch():
