@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import streamlink
-from flask import Flask, jsonify, render_template, Response, make_response
+from flask import Flask, jsonify, render_template, Response, make_response, request, send_from_directory, url_for
 import threading
 import time
 import requests
@@ -16,6 +16,7 @@ from config import Config
 from pixel_font import PIXEL_FONT, create_text_frame
 from logging.handlers import RotatingFileHandler
 import sys
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -32,6 +33,19 @@ current_frame = None
 stream_status = "offline"  # New variable to track stream status
 frame_lock = threading.Lock()
 status_lock = threading.Lock()  # New lock for status updates
+
+# Add these configurations
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Create uploads directory if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Global variables for image mode
+display_mode = "stream"  # or "image"
+current_image = None
+image_lock = threading.Lock()
 
 class StickyLogger:
     def __init__(self):
@@ -330,6 +344,171 @@ def stream_processor():
         if 'cap' in locals():
             cap.release()
 
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'image' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Create thumbnail and process image for display
+        img = Image.open(filepath)
+        img = img.convert('RGB')
+        
+        # Calculate thumbnail dimensions maintaining aspect ratio
+        width, height = img.size
+        target_width = 64
+        target_height = 32
+        
+        scale_w = target_width / width
+        scale_h = target_height / height
+        scale = min(scale_w, scale_h)
+        
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        
+        # Resize image
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Create black background
+        background = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+        
+        # Center the image
+        x = (target_width - new_width) // 2
+        y = (target_height - new_height) // 2
+        
+        # Paste resized image onto black background
+        background.paste(img, (x, y))
+        
+        # Save thumbnail
+        background.save(os.path.join(app.config['UPLOAD_FOLDER'], f'thumb_{filename}'))
+        
+        return jsonify({
+            'id': filename,
+            'thumbnail': url_for('uploaded_file', filename=f'thumb_{filename}')
+        })
+    return jsonify({'error': 'Invalid file type'}), 400
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/images')
+def list_images():
+    files = []
+    for filename in os.listdir(app.config['UPLOAD_FOLDER']):
+        if filename.startswith('thumb_'):
+            original = filename[6:]  # Remove 'thumb_' prefix
+            files.append({
+                'id': original,
+                'thumbnail': url_for('uploaded_file', filename=filename)
+            })
+    return jsonify(files)
+
+@app.route('/set_mode', methods=['POST'])
+def set_mode():
+    global display_mode
+    data = request.json
+    display_mode = data.get('mode', 'stream')
+    return jsonify({'status': 'ok'})
+
+@app.route('/select_image', methods=['POST'])
+def select_image():
+    global current_image
+    data = request.json
+    image_id = data.get('id')
+    
+    if image_id:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], image_id)
+        if os.path.exists(filepath):
+            with image_lock:
+                # Open and convert image to RGB
+                img = Image.open(filepath)
+                img = img.convert('RGB')
+                
+                # Get original dimensions
+                width, height = img.size
+                
+                # Calculate target dimensions maintaining aspect ratio
+                target_width = 64
+                target_height = 32
+                
+                # Calculate scaling factors
+                scale_w = target_width / width
+                scale_h = target_height / height
+                scale = min(scale_w, scale_h)
+                
+                # Calculate new dimensions
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                
+                # Resize image maintaining aspect ratio
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Create black background
+                background = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+                
+                # Calculate position to center the image
+                x = (target_width - new_width) // 2
+                y = (target_height - new_height) // 2
+                
+                # Paste resized image onto black background
+                background.paste(img, (x, y))
+                
+                # Convert to numpy array for display
+                current_image = np.array(background)
+    
+    return jsonify({'status': 'ok'})
+
+# Modify your video_feed function to handle image mode
+def generate_frames():
+    while True:
+        if display_mode == "image" and current_image is not None:
+            with image_lock:
+                frame_array = current_image
+        else:
+            # Your existing frame generation code...
+            with status_lock:
+                current_status = stream_status
+            
+            with frame_lock:
+                if current_status == "offline":
+                    frame_data = create_text_frame(f"{Config.STREAMER_NAME} is offline")
+                    frame_array = np.array(frame_data, dtype=np.uint8)
+                    frame_array = np.stack([frame_array] * 3, axis=-1)
+                elif current_frame is None:
+                    frame_data = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
+                    frame_array = np.array(frame_data, dtype=np.uint8)
+                    frame_array = np.stack([frame_array] * 3, axis=-1)
+                else:
+                    frame_array = np.array(current_frame, dtype=np.uint8)
+                    frame_array = frame_array.reshape((32, 64, 3))
+
+        # Scale up for display
+        display_frame = cv2.resize(frame_array, (640, 320), interpolation=cv2.INTER_NEAREST)
+        display_frame = cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR)
+        
+        ret, buffer = cv2.imencode('.jpg', display_frame)
+        if ret:
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        
+        time.sleep(0.1)
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(),
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
+
 @app.route('/frame.json')
 def get_frame():
     """Return current frame as compact binary data"""
@@ -384,54 +563,17 @@ def get_frame():
         
         return response
 
-@app.route('/watch')
+@app.route('/')
 def watch():
     """Debug page to watch the stream processing"""
     return render_template('watch.html')
 
-@app.route('/video_feed')
-def video_feed():
-    """Video streaming route."""
-    def generate():
-        while True:
-            with status_lock:
-                current_status = stream_status
-                
-            with frame_lock:
-                if current_status == "offline":
-                    # Create a frame with the offline message
-                    frame_data = create_text_frame(f"{Config.STREAMER_NAME} is offline")
-                    frame_array = np.array(frame_data, dtype=np.uint8)
-                elif current_frame is None:
-                    # Create a frame with the connecting message
-                    frame_data = create_text_frame(f"Connecting to {Config.STREAMER_NAME}...")
-                    frame_array = np.array(frame_data, dtype=np.uint8)
-                else:
-                    frame_array = np.array(current_frame, dtype=np.uint8)
-                
-                # Reshape the array to 32x64x3 for display
-                if len(frame_array.shape) == 2:  # If it's a 2D array (text frame)
-                    # Convert single values to RGB
-                    frame_array = np.stack([frame_array] * 3, axis=-1)
-                else:
-                    frame_array = frame_array.reshape((32, 64, 3))
-                
-                # Scale up for display
-                display_frame = cv2.resize(frame_array, (640, 320), 
-                                        interpolation=cv2.INTER_NEAREST)
-                
-                # Convert to BGR for cv2.imencode
-                display_frame = cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR)
-                
-                ret, buffer = cv2.imencode('.jpg', display_frame)
-                if ret:
-                    frame_bytes = buffer.tobytes()
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.1)
-
-    return Response(generate(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/get_mode')
+def get_mode():
+    return jsonify({
+        'mode': display_mode,
+        'current_image': current_image is not None
+    })
 
 if __name__ == '__main__':
     # Start stream processor in background

@@ -1,99 +1,275 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Stream Monitor</title>
+    <title>Stream Controller</title>
     <style>
+        :root {
+            --primary: #4CAF50;
+            --danger: #F44336;
+            --accent: #2196F3;
+            --bg-dark: #1a1a1a;
+            --bg-darker: #0f0f0f;
+            --surface: #2a2a2a;
+            --text: #ffffff;
+            --border: #3a3a3a;
+        }
+
         body {
             margin: 0;
-            padding: 20px;
-            background: #1a1a1a;
-            color: #fff;
+            background: var(--bg-dark);
+            color: var(--text);
             font-family: system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
         }
+
         .container {
-            display: flex;
-            gap: 20px;
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
+            padding: 20px;
         }
-        .video-container {
-            flex: 1;
-            background: #2a2a2a;
-            padding: 15px;
+
+        .header {
+            background: var(--bg-darker);
+            padding: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            text-align: center;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+        }
+
+        .preview-section {
+            background: var(--surface);
+            padding: 1.5rem;
             border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
-        .video-display {
-            width: 100%;
-            aspect-ratio: 16/9;
-            overflow: hidden;
-            background: #000;
+
+        .controls-section {
+            background: var(--surface);
+            padding: 1.5rem;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .section-title {
+            margin: 0 0 1rem 0;
+            font-size: 1.2rem;
+            color: var(--text);
+        }
+
+        .preview-container {
+            aspect-ratio: 2/1;
+            background: var(--bg-darker);
             border-radius: 4px;
+            overflow: hidden;
         }
-        .video-display img {
+
+        .preview-container img {
             width: 100%;
             height: 100%;
             object-fit: contain;
         }
-        .data-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        .json-container {
-            background: #2a2a2a;
-            padding: 15px;
-            border-radius: 8px;
-            font-family: monospace;
-            white-space: pre-wrap;
-            height: 300px;
-            overflow-y: auto;
-        }
-        h1 {
+
+        .button {
+            padding: 0.75rem 1rem;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            width: 100%;
             text-align: center;
-            margin-bottom: 30px;
-            font-size: 2em;
-            color: #fff;
         }
-        h2 {
-            margin: 0 0 15px 0;
-            font-size: 1.2em;
-            color: #fff;
+
+        .button-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .button-primary.active {
+            background: var(--danger);
+        }
+
+        .button-secondary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .image-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .image-option {
+            position: relative;
+            aspect-ratio: 2/1;
+            border: 2px solid var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .image-option:hover {
+            border-color: var(--accent);
+        }
+
+        .image-option.active {
+            border-color: var(--primary);
+        }
+
+        .image-option img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #imageUpload {
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <h1>Stream Monitor</h1>
+    <div class="header">
+        <h1>Stream Controller</h1>
+    </div>
+
     <div class="container">
-        <div class="video-container">
-            <h2>Live Stream</h2>
-            <div class="video-display">
-                <img src="{{ url_for('video_feed') }}" alt="Video Stream">
+        <div class="content">
+            <div class="preview-section">
+                <h2 class="section-title">Preview</h2>
+                <div class="preview-container">
+                    <img src="{{ url_for('video_feed') }}" alt="Stream Preview">
+                </div>
             </div>
-        </div>
-        <div class="data-container">
-            <div class="json-container">
-                <h2>Frame Data</h2>
-                <pre id="frameData">Waiting for data...</pre>
+
+            <div class="controls-section">
+                <div>
+                    <h2 class="section-title">Display Mode</h2>
+                    <button id="toggleMode" class="button button-primary">
+                        Switch to Image Mode
+                    </button>
+                </div>
+
+                <div id="imageControls" style="display: none;">
+                    <h2 class="section-title">Image Controls</h2>
+                    <input type="file" id="imageUpload" accept="image/*">
+                    <button type="button" class="button button-secondary" onclick="document.getElementById('imageUpload').click()">
+                        Upload New Image
+                    </button>
+                    
+                    <div class="image-gallery" id="imageSelect">
+                        <!-- Images will be added here dynamically -->
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        const frameData = document.getElementById('frameData');
-        
-        async function updateData() {
-            try {
-                const response = await fetch('/frame.json');
-                const data = await response.json();
-                frameData.textContent = JSON.stringify(data, null, 2);
-            } catch (error) {
-                console.error('Error fetching data:', error);
-            }
+        const toggleBtn = document.getElementById('toggleMode');
+        const imageControls = document.getElementById('imageControls');
+        const imageUpload = document.getElementById('imageUpload');
+        const imageSelect = document.getElementById('imageSelect');
+        let isImageMode = false;
+
+        // Function to update UI based on mode
+        function updateUIMode(mode) {
+            isImageMode = mode === 'image';
+            toggleBtn.textContent = isImageMode ? 'Switch to Stream Mode' : 'Switch to Image Mode';
+            toggleBtn.classList.toggle('active', isImageMode);
+            imageControls.style.display = isImageMode ? 'block' : 'none';
         }
 
-        // Update data every 100ms
-        setInterval(updateData, 100);
+        // Get initial mode from server
+        fetch('/get_mode')
+            .then(response => response.json())
+            .then(data => {
+                updateUIMode(data.mode);
+            });
+
+        toggleBtn.addEventListener('click', () => {
+            isImageMode = !isImageMode;
+            updateUIMode(isImageMode ? 'image' : 'stream');
+            
+            fetch('/set_mode', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ mode: isImageMode ? 'image' : 'stream' })
+            });
+        });
+
+        imageUpload.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    addImageOption(result.id, result.thumbnail);
+                }
+            } catch (error) {
+                console.error('Upload failed:', error);
+            }
+        });
+
+        function addImageOption(id, thumbnail) {
+            const div = document.createElement('div');
+            div.className = 'image-option';
+            div.innerHTML = `<img src="${thumbnail}" alt="Uploaded image ${id}">`;
+            div.addEventListener('click', () => selectImage(id, div));
+            imageSelect.appendChild(div);
+        }
+
+        function selectImage(id, element) {
+            document.querySelectorAll('.image-option').forEach(opt => opt.classList.remove('active'));
+            element.classList.add('active');
+            
+            fetch('/select_image', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ id: id })
+            });
+        }
+
+        // Load existing images on page load
+        fetch('/images')
+            .then(response => response.json())
+            .then(images => {
+                images.forEach(img => addImageOption(img.id, img.thumbnail));
+            });
     </script>
 </body>
 </html> 
